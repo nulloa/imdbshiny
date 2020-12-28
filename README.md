@@ -1,2 +1,2 @@
-# imbdshiny
-A shiny app to plot imbd data
+# imdbshiny
+A shiny app to plot imdb data
