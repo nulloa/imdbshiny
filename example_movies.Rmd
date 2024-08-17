@@ -1,0 +1,190 @@
+---
+title: "Creating Ratings Groups"
+author: "Nehemias Ulloa"
+date: "4/22/2020"
+output: html_document
+---
+
+
+## Summary
+In this tutorial, I will explain how we can use clustering techniques to create
+ratings groups. Then I will plot the newly created groups. Also like most the 
+credit goes to [Sam Tyner](https://twitter.com/sctyner) for inspiring this and 
+helping with a good amount of the code.
+
+
+You'll need this install this package: `devtools::install_github("rmhogervorst/imdb")`.
+This package is pretty cool. Learn more about it on [github](https://github.com/RMHogervorst/imdb).
+
+
+## Libraries
+Here are some of the libraries I'll be using throughout the example; most of 
+this relies on the tidyverse (classic).
+
+```{r libraries, message=FALSE}
+
+
+library(imdb)
+# library(rvest)
+library(tidyverse)
+# library(glue)
+library(kableExtra)
+library(cluster)
+library(factoextra)
+```
+
+## Data
+The data comes from [IMBD](www.imdb.com). I will be looking at The Office episode
+ratings. See [here](https://github.com/RMHogervorst/imdb) for more info on how to get the data.
+
+```{r functions, echo=FALSE}
+
+df = imdbSeries(seriesname = "The Office", seasons = 1:9) %>% 
+  left_join(enrichIMDB(.) %>% select(imdbID, director, runtime, votes))
+
+
+
+imdbMovies(moviename = "Rogue One")
+
+
+get_rating_score <- function(r, bnd){
+  score <- rep(F, length(r))
+  for (i in 1:(length(bnd)-1)){
+    score[between(r, bnd[i], bnd[i+1])] <- c("Garbage", "Bad", "Average", "Great", "Perfect")[i]
+  }
+  return(score)
+}
+
+```
+
+
+```{r get_data, echo=FALSE}
+
+```
+
+Let see what the data looks like.
+```{r data_sample}
+head(all_episodes) %>%
+  select(-descr) %>%
+  kable() %>% kable_styling()
+```
+
+Here is a histogram of the ratings for every episode.
+```{r data_sample_plot}
+all_episodes %>%
+  ggplot(aes(x=rating)) + 
+    geom_histogram() + 
+    theme_bw()
+```
+
+Ideally we'd like to categorize each episode into one of five groups:
+
+ - Perfect ![alt text](http://i.redd.it/lw9m6l93a0p11.jpg)
+
+ - Great ![alt text](http://www.theofficequotes.com/screenshots/8720d27b175709b74aae811df2ed8158.jpg)
+
+ - Average ![alt text](https://i.pinimg.com/originals/54/02/b0/5402b09ba1ffcfb356627b25346c0936.jpg)
+
+ - Bad ![alt text](http://media1.tenor.com/images/e3d250d45b8d3d386473ba0dc28925e1/tenor.gif)
+
+ - Garbage ![Alt Text](http://i.pinimg.com/736x/4c/e2/40/4ce240e68f3a770b08f5445ff8fa4e68.jpg)
+
+
+
+
+There isn't much data here but lets try a basic k-means clusting algorithm.
+```{r cluster_ratings}
+set.seed(808)
+cratings <- kmeans(all_episodes %>% select(season, ep_no, rating, nvotes) %>% na.omit() %>% scale(), 5, nstart = 25)
+
+all_episodes <- all_episodes %>%
+  na.omit() %>%
+  ungroup() %>%
+  mutate(clust_score = cratings$cluster)
+```
+
+Here some plots of the clusters.
+```{r cluster_plot}
+fviz_cluster(cratings, geom = "point",  data = all_episodes %>% select(season, ep_no, rating, nvotes) %>% na.omit() %>% scale())
+
+all_episodes %>% 
+  select(season, ep_no, rating, nvotes, clust_score) %>% 
+  ggplot(aes(x=rating, y=ep_no, color = factor(clust_score), label = season)) +
+    geom_text()
+```
+
+So as we can see from the plots some of the groups are seperated by episode 
+number. Since I included that in the data.frame to be used in the clustering 
+algorithm, the algrithm assumed it was a meaningful variable to seperate on. 
+I think it would be interesting to see how it would clusted based soley on the 
+rating and number of votes. Let's try that.
+
+```{r cluster_ratings2}
+set.seed(808)
+cratings <- kmeans(all_episodes %>% select(rating, nvotes) %>% na.omit() %>% scale(), 5, nstart = 25)
+
+all_episodes <- all_episodes %>%
+  na.omit() %>%
+  ungroup() %>%
+  mutate(clust_score2 = cratings$cluster)
+```
+
+Here some plots of the clusters. It no longer depends on the episode number 
+which is good.
+
+```{r cluster_plot2}
+fviz_cluster(cratings, geom = "point",  data = all_episodes %>% select(rating, nvotes) %>% na.omit() %>% scale())
+
+all_episodes %>% 
+  select(season, ep_no, rating, nvotes, clust_score, clust_score2) %>% 
+  ggplot(aes(x=rating, y=ep_no, color = factor(clust_score2), label = season)) +
+    geom_text()
+
+all_episodes %>% 
+  select(season, ep_no, rating, nvotes, clust_score, clust_score2) %>% 
+  ggplot(aes(x=rating, y=nvotes, color = factor(clust_score2), label = season)) +
+    geom_text()
+```
+
+
+So I'd like to see how it would compare to a fixed grouping using quantiles.
+```{r make_basic_clusters}
+bnds = quantile(all_episodes$rating, 0:5/5)
+
+all_episodes <- all_episodes %>%
+  mutate(fixed_score = get_rating_score(rating, bnd=bnds), 
+                        # levels = c("Garbage", "Bad", "Average", "Great", "Perfect"), 
+                        # ordered = T),
+         clust_score = recode_factor(clust_score2,
+                                            '1' = "Garbage", 
+                                            '5' = "Bad", 
+                                            '3' = "Average", 
+                                            '2' = "Great", 
+                                            '4' = "Perfect"))
+
+```
+
+Here is the plot! The first observation is the clustering algrithm is more 
+choosy about which episodes are in the higher rating categories. Since the 
+clustering algorithm is taking the number of votes into account, it allows for
+certain ratings to blend when they look like the otherwise shouldn't.
+```{r final_cluster_plots}
+all_episodes %>%
+  select(season, ep_no, airdate, rating, nvotes, clust_score, fixed_score) %>%
+  gather(grptype, grpng, -season, -ep_no, -airdate, -rating, -nvotes) %>%
+  mutate(grpng = factor(grpng, c("Perfect", "Great", "Average", "Bad", "Garbage")),
+         grptype = recode_factor(grptype,
+                                 'clust_score' = 'Clusters',
+                                 'fixed_score' = 'Quantiles')) %>%
+  ggplot(aes(x=airdate, y=rating, color=grpng)) + 
+    geom_point(size=3) + theme_bw() + 
+    facet_grid(~grptype) + 
+    labs(x="Airdate", y="Rating", color="Rating Group")
+```
+
+
+
+
+
+
+
